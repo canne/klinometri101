@@ -1,10 +1,16 @@
 # klinometri101
 NMEA 0183 ROLL PITCH YAW Genuino101
+
 // Work derived from CurieIMU library and from Madgwick library visualizer, see
+
 // https://www.arduino.cc/en/Tutorial/Genuino101CurieIMUOrientationVisualiser
+
 // Please get the above example working first, then continue with this sketch
+
 // which is best debugged and tested with PuTTY and used on a USB serial line 
+
 // petri38-github@yahoo.com
+
 // GPL v3 - see LICENSE
 
 Program to use Genuino101 as inclination sensor with NMEA 0183 output
@@ -15,6 +21,7 @@ therefore it cannot be used as a magnetic compass.
 The NMEA output is truncated to one significant decimal with a step of
 0.5 degrees. The dreaded NMEA XDR-sentence is used in output
 like in this example: KMXDR,A,-13.5,D,ROLL*checksum
+
 While the position algorithm is maintained at 25 Hz with the measured
 sensor data the NMEA interface is limited to 4800 baud, with purpose
 to maintain the compatibility with the standard NMEA 0183. If higher
@@ -43,9 +50,13 @@ the raw data values fed into the position algorithm are displayed. To
 leave the debug mode, one needs to reset the board.
 
 The board's activity LED signals the activity:
+
 LED unlit - program is waiting for a listener on the USB serial line
+
 LED blinking every second - program cannot detect an IMU unit
+
 LED blinking very fast - the IMU unit is read
+
 
 
 
