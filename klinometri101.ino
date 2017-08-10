@@ -8,10 +8,12 @@
 
 #include <CurieIMU.h>
 #include <MadgwickAHRS.h>
+#include <EEPROM.h>
 
 Madgwick filter;
 unsigned long microsPerReading, microsNow, microsPrevious;
 boolean debug;
+boolean calibrate;
 float accelScale, gyroScale;
 int aix, aiy, aiz;
 int gix, giy, giz;
@@ -20,11 +22,25 @@ float gx, gy, gz;
 float roll, pitch, heading;
 float rollStart, pitchStart, headingStart;
 boolean blinkState;
+struct settings_t
+{
+	unsigned long start;
+	float acc_offset_x;
+	float acc_offset_y;
+	float acc_offset_z;
+	float gyr_offset_x;
+	float gyr_offset_y;
+	float gyr_offset_z;
+	unsigned long end;
+} settings;
 
 
 void setup() {
 	char c; // read here from the serial line a command before the init
 	int waitcmdsec = 5; // How long time to wait for a command
+	int i;
+	boolean validsettings = false;
+	int eeAddress = 0;
 
 	pinMode(LED_BUILTIN, OUTPUT); // configure Arduino LED for activity indicator
 	boolean blinkState = false; // initial state of the LED is no activity
@@ -35,19 +51,55 @@ void setup() {
 	while (!Serial);    // wait for the serial port to open - THERE MUST BE A DEVICE LISTENING!
 
 	debug = false;
-	while (waitcmdsec > 0) { // wait for an optional command from the serial port
-		if (Serial.available())  {
-			char c = Serial.read();  //gets one byte from serial buffer
-			if ((c == 'd') || (c == 'D')) {// type a key D to switch on debug mode
-				debug = true;
-				break;
-			} // Debug requested
-		}
-		delay(1000); // wait for 1s
+	while (waitcmdsec > 0) { // wait for an optional commands from the serial port right after serial start
+		for (i = 0; i < 4; i++) {
+			if (Serial.available())  {
+				c = Serial.read();  //gets one byte from serial buffer
+				if ((c == 'd') || (c == 'D')) debug = true; // type key D to switch on debug mode
+				if ((c == 'c') || (c == 'C')) calibrate = true; // type key C to force calibration
+			} // then character(s)
+			if (debug && calibrate) break;
+			delay(250);
+		} // 250ms scan
+		if (debug && calibrate) break;
 		waitcmdsec--;
 	} // while() wait for a key w/ timeout
 
-	if (debug) Serial.println("Welcome to klinometri101 v0.901 running in debug mode - output is not usable with instruments");
+	if (debug) Serial.println("Welcome to klinometri101 v0.902");
+	if (debug) Serial.println("===============================");
+	if (debug) Serial.println("Running in debug mode - output is not usable in navigation");
+
+	// read settings from the EEPROM (actually Flash here)
+	EEPROM.get(eeAddress, settings);
+	if ((settings.start == 0xBBCCAADD) && (settings.end == 0xDDAACCBB)) {
+		validsettings = true;
+		if (debug) Serial.println("Stored settings found.");
+	}
+	else
+		if (debug) Serial.println("Stored settings are garbage, ignoring.");
+
+	if (!validsettings) {
+		calibrate = true;
+		if (debug) Serial.println("No valid settings found from persistent memory. Forcing calibration.");
+	} // no valid settings
+	else {
+		if (calibrate) {
+			if (debug) Serial.println("Valid settings found from persistent memory but calibration forced.");
+			if (debug) Serial.println("These values will be overwritten:");
+		} // valid data but calibration requested
+		else {
+			if (debug) Serial.println("Valid settings found from persistent memory:");
+		} // else valid data and no calibration asked
+		if (debug){
+			Serial.print(settings.acc_offset_x); Serial.print("\t");			
+			Serial.print(settings.acc_offset_y); Serial.print("\t");
+			Serial.print(settings.acc_offset_z); Serial.print("\t");
+			Serial.print(settings.gyr_offset_x); Serial.print("\t");
+			Serial.print(settings.gyr_offset_y); Serial.print("\t");
+			Serial.print(settings.gyr_offset_z); Serial.print("\t");
+			Serial.println("");
+		} // debug
+	} // else valid settings
 
 	// initialize the IMU device
 	if (debug) Serial.println("Initializing IMU device...");
@@ -57,79 +109,112 @@ void setup() {
 	else {
 		Serial.println("CurieIMU initialization failed");
 		while (1) {
-			digitalWrite(LED_BUILTIN, LOW);
+			digitalWrite(LED_BUILTIN, blinkState);
 			delay(1000);                       // wait for 1 s
-			digitalWrite(LED_BUILTIN, HIGH);
+			blinkState = !blinkState;
+			digitalWrite(LED_BUILTIN, blinkState);
 			delay(1000);                       // wait for a second
+			blinkState = !blinkState;
 		} // not much reason to continue, try to alert the user by blinking a LED
 	} // else a problem with the IMU unit, perhaps not Arduino/Genuino101?
 
 	if (debug) {
-		Serial.println("Internal sensor offsets BEFORE calibration...");
-		Serial.print(CurieIMU.getAccelerometerOffset(X_AXIS));
-		Serial.print("\t"); // -76
-		Serial.print(CurieIMU.getAccelerometerOffset(Y_AXIS));
-		Serial.print("\t"); // -235
-		Serial.print(CurieIMU.getAccelerometerOffset(Z_AXIS));
-		Serial.print("\t"); // 168
-		Serial.print(CurieIMU.getGyroOffset(X_AXIS));
-		Serial.print("\t"); // 0
-		Serial.print(CurieIMU.getGyroOffset(Y_AXIS));
-		Serial.print("\t"); // 0
+		Serial.println("Internal sensor offsets at RESET...");
+		Serial.print(CurieIMU.getAccelerometerOffset(X_AXIS)); Serial.print("\t");
+		Serial.print(CurieIMU.getAccelerometerOffset(Y_AXIS)); Serial.print("\t");
+		Serial.print(CurieIMU.getAccelerometerOffset(Z_AXIS)); Serial.print("\t");
+		Serial.print(CurieIMU.getGyroOffset(X_AXIS)); Serial.print("\t");
+		Serial.print(CurieIMU.getGyroOffset(Y_AXIS)); Serial.print("\t");
 		Serial.println(CurieIMU.getGyroOffset(Z_AXIS));
 	} // debug
 
-	if (debug) Serial.println("\nAbout to calibrate. Make sure your board is stable and upright");
-	delay(5000);
+	if (calibrate) {
+		if (debug) Serial.println("About to calibrate. Make sure your board is stable and upright");
+		delay(5000);
 
-	// The board must be resting in a horizontal position for
-	// the following calibration procedure to work correctly!
-	if (debug) Serial.print("Starting Gyroscope calibration and enabling offset compensation...");
-	CurieIMU.autoCalibrateGyroOffset();
-	if (debug) Serial.println(" Done");
+		if (debug) Serial.print("Starting Gyroscope calibration and enabling offset compensation...");
+		CurieIMU.autoCalibrateGyroOffset();
+		if (debug) Serial.println(" Done");
 
-	if (debug) Serial.print("Starting Acceleration calibration and enabling offset compensation...");
-	CurieIMU.autoCalibrateAccelerometerOffset(X_AXIS, 0);
-	CurieIMU.autoCalibrateAccelerometerOffset(Y_AXIS, 0);
-	CurieIMU.autoCalibrateAccelerometerOffset(Z_AXIS, 1);
-	if (debug) Serial.println(" Done");
+		if (debug) Serial.print("Starting Acceleration calibration and enabling offset compensation...");
+		CurieIMU.autoCalibrateAccelerometerOffset(X_AXIS, 0);
+		CurieIMU.autoCalibrateAccelerometerOffset(Y_AXIS, 0);
+		CurieIMU.autoCalibrateAccelerometerOffset(Z_AXIS, 1);
+		if (debug) Serial.println(" Done");
+
+		settings.acc_offset_x = CurieIMU.getAccelerometerOffset(X_AXIS);
+		settings.acc_offset_y = CurieIMU.getAccelerometerOffset(Y_AXIS);
+		settings.acc_offset_z = CurieIMU.getAccelerometerOffset(Z_AXIS);
+		settings.gyr_offset_x = CurieIMU.getGyroOffset(X_AXIS);
+		settings.gyr_offset_y = CurieIMU.getGyroOffset(Y_AXIS);
+		settings.gyr_offset_z = CurieIMU.getGyroOffset(Z_AXIS);
+
+
+		if (debug) {
+			Serial.println("Internal sensor offsets AFTER calibration...");
+			Serial.print(settings.acc_offset_x); Serial.print("\t");
+			Serial.print(settings.acc_offset_y); Serial.print("\t");
+			Serial.print(settings.acc_offset_z); Serial.print("\t");
+			Serial.print(settings.gyr_offset_x); Serial.print("\t");
+			Serial.print(settings.gyr_offset_y); Serial.print("\t");
+			Serial.print(settings.gyr_offset_z); Serial.print("\t");
+			Serial.println("");
+			Serial.print("Press a key to continue or wait 15s...");
+			waitcmdsec = 15;
+			while (waitcmdsec > 0) { // wait for a key from the serial port w/ timeout
+				if (Serial.available()) {
+					(void) Serial.read();  //gets one byte from serial buffer
+					break;
+				} // character available in serial
+				delay(1000); // wait for 1s
+				waitcmdsec--;
+			} // while()
+			Serial.println("");
+		} // debug
+
+		if (debug) Serial.println("Writing calibration values into the persistent memory...");
+		settings.start = 0xBBCCAADD;
+		settings.end = 0xDDAACCBB;
+		EEPROM.put(eeAddress, settings);
+		if (debug) Serial.println("Done.");
+
+	} // then calibration is necessary or requested
+	else {
+		if (debug) Serial.println("Restoring settings stored in persistent memory into the IMU device");
+		CurieIMU.setAccelerometerOffset(X_AXIS, settings.acc_offset_x);
+		CurieIMU.setAccelerometerOffset(Y_AXIS, settings.acc_offset_y);
+		CurieIMU.setAccelerometerOffset(Z_AXIS, settings.acc_offset_z);
+		CurieIMU.setGyroOffset(X_AXIS, settings.gyr_offset_x);
+		CurieIMU.setGyroOffset(Y_AXIS, settings.gyr_offset_y);
+		CurieIMU.setGyroOffset(Z_AXIS, settings.gyr_offset_z);
+	} // else no calibration, use values from persistent settings
+
+	if (debug) Serial.println("Setting the frequency domain at 25Hz");
+	CurieIMU.setGyroRate(25); // 25Hz
+	CurieIMU.setAccelerometerRate(25); // must be the same as Gyro here, see CurieIMU.h, 25Hz is the lowest common nominator
+	filter.begin(25); // instantiate the Madgwick filter also to the same frequency domain
+
+	if (debug) Serial.println("Setting the accelerometer range to 2G");
+	CurieIMU.setAccelerometerRange(2);
+	if (debug) Serial.println("Setting the gyroscope range to 250 degrees/second");
+	CurieIMU.setGyroRange(250);
+
+	microsPerReading = 1e6 / 25; // Let's try to keep the 25Hz here, albeit micros() is not a single micro tick but 4 or 8 micros min.
+	microsPrevious = micros(); // No more actions in setup() - we deal with the eventual apprx. 70s overflow of the micros() count in the loop()
 
 	if (debug) {
-		Serial.println("Internal sensor offsets AFTER calibration...");
-		Serial.print(CurieIMU.getAccelerometerOffset(X_AXIS));
-		Serial.print("\t"); // -76
-		Serial.print(CurieIMU.getAccelerometerOffset(Y_AXIS));
-		Serial.print("\t"); // -2359
-		Serial.print(CurieIMU.getAccelerometerOffset(Z_AXIS));
-		Serial.print("\t"); // 1688
-		Serial.print(CurieIMU.getGyroOffset(X_AXIS));
-		Serial.print("\t"); // 0
-		Serial.print(CurieIMU.getGyroOffset(Y_AXIS));
-		Serial.print("\t"); // 0
-		Serial.println(CurieIMU.getGyroOffset(Z_AXIS));
-		Serial.print("\nPress a key to continue...");
+		Serial.print("setup() terminated - Press a key to continue or wait 15s...");
 		waitcmdsec = 15;
 		while (waitcmdsec > 0) { // wait for a key from the serial port w/ timeout
 			if (Serial.available()) {
-				char c = Serial.read();  //gets one byte from serial buffer
+				(void)Serial.read();  //gets one byte from serial buffer
 				break;
 			} // character available in serial
 			delay(1000); // wait for 1s
 			waitcmdsec--;
 		} // while()
+		Serial.println("");
 	} // debug
-
-	CurieIMU.setGyroRate(25); // 25Hz
-	CurieIMU.setAccelerometerRate(25); // must be the same as Gyro here, see CurieIMU.h, 25Hz is the lowest common nominator
-	filter.begin(25); // instantiate the Madgwick filter also to the same frequency domain
-
-	// Set the accelerometer range to 2G
-	CurieIMU.setAccelerometerRange(2);
-	// Set the gyroscope range to 250 degrees/second
-	CurieIMU.setGyroRange(250);
-
-	microsPerReading = 1e6 / 25; // Let's try to keep the 25Hz here, albeit micros() is not a single micro tick but 4 or 8 micros min.
-	microsPrevious = micros(); // No more actions in setup() - we deal with the eventual apprx. 70s overflow of the micros() count in the loop()
 	
 } // setup()
 

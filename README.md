@@ -36,17 +36,25 @@ tactics-plugin. For debugging purposes it can be a serial console, such
 as PuTTY.
 
 Once the serial communication becomes available, the gyroscope and
-accelerometer are calibrated. The startup of the board takes about five
+accelerometer are calibrated unless valid calibration values are found
+from the persistent memory. The startup of the board takes about five
 seconds, and the calibration another five seconds. During the calibration,
-the board should not move. Admittedly, this is not very practical
-when conditions are difficult. I can but suggest to complete the startup
+the board should not move. Complete the calibration preferably
 while still moored or when motoring with sea not being too rough.
+
+The recalibration can be forced using a suitable serial line console
+such as PuTTY.exe on the COM-port of the USB serial line. The chart
+plotter or other programs should be disconnected from teh USB serial
+line at that time. If you hit key "C" within the five first seconds
+after the serial line is connected, the calibration procedure is
+forced to be executed and the result overwritest the values in the
+persistent memory.
 
 There is a possibility to observe the calibration procedure:
 If you hit key "D" in the serial line console within the five seconds
 before the calibration starts, the program switches into debug mode.
-In debug mode, no NMEA data is sent but the calibration procedure and
-the raw data values fed into the position algorithm are displayed. To
+In debug mode, the calibration procedure and the raw data values fed
+into the position algorithm are displayed along the NMEA data. To
 leave the debug mode, one needs to reset the board.
 
 The board's activity LED signals the activity:
