@@ -33,7 +33,7 @@ that the serial line communication becomes available. In other words,
 some program needs to open the USB serial device before the program starts.
 Usually, this program is a chart plotter, like OCPN with the excellent
 tactics-plugin. For debugging purposes it can be a serial console, such
-as PuTTY.
+as PuTTY.exe on Windows or minicom on Linux.
 
 Once the serial communication becomes available, the gyroscope and
 accelerometer are calibrated unless valid calibration values are found
@@ -44,7 +44,7 @@ while still moored or when motoring with sea not being too rough.
 
 The recalibration can be forced using a suitable serial line console
 such as PuTTY.exe on the COM-port of the USB serial line. The chart
-plotter or other programs should be disconnected from teh USB serial
+plotter or other programs should be disconnected from the USB serial
 line at that time. If you hit key "C" within the five first seconds
 after the serial line is connected, the calibration procedure is
 forced to be executed and the result overwritest the values in the
