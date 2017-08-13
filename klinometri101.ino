@@ -88,7 +88,7 @@ void setup() {
 		waitcmdsec--;
 	} // while() wait for a key w/ timeout
 
-	if (debug) Serial.println("Welcome to klinometri101 v0.904");
+	if (debug) Serial.println("Welcome to klinometri101 v1.0.1");
 	if (debug) Serial.println("===============================");
 	if (debug) Serial.println("Running in debug mode - output is not usable in navigation");
 
