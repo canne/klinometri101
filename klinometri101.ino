@@ -10,15 +10,19 @@
 #include <CurieIMU.h>
 #include <MadgwickAHRS.h>
 #include <EEPROM.h>
-#include <malloc.h>
+#include <MemoryFree.h>
+#include <math.h>
 
 // Button/switch connecting this pin to GND requests calibration
 #define PIN_CALIBRATE_BUTTON 7
-// Button or a momentary switch connecting this pin to GND makes current heading new YAW 0 in NMEA output
-#define PIN_YAWZERO_BUTTON 8
+// Switch or jumper connecting this pin to GND indicater that Arduino101's USB connector is pointing to the back of the boat
+#define PIN_USBPOINTS_BACK 8
 
+char const *prefixNMEA = "KM"; // Feel free to change this if not suiting your needs
 Madgwick *filter = NULL;
 unsigned long microsPerReading, microsNow, microsPrevious;
+unsigned long microsPerRollPitchNMEA, microsRollPitchNMEAPrevious;
+unsigned long microsPerRotNMEA, microsPerRotNMEAPrevious;
 boolean debug;
 boolean calibrate;
 float accelScale, gyroScale;
@@ -26,13 +30,13 @@ int aix, aiy, aiz;
 int gix, giy, giz;
 float ax, ay, az;
 float gx, gy, gz;
-float roll, pitch, heading;
+float roll, pitch, heading, rotation;
 float rollStart, pitchStart, headingStart;
 boolean blinkState;
 int filtertraining;
 int calibrationSwitchAntiBounce, calibrationSwitchAntiBounceCnt;
-int yawZeroSwitchAntiBounce, yawZeroSwitchAntiBounceCnt;
-float yawZero, yaw;
+int backwardsSwitchAntiBounce, backwardsSwitchAntiBounceCnt;
+boolean backwardsSwitch;
 int eeAddress;
 
 struct settings_t
@@ -44,7 +48,6 @@ struct settings_t
 	float gyr_offset_x;
 	float gyr_offset_y;
 	float gyr_offset_z;
-	float yawZero;
 	unsigned long end;
 } settings;
 
@@ -143,7 +146,6 @@ void setup() {
 			Serial.print(settings.gyr_offset_x); Serial.print("\t");
 			Serial.print(settings.gyr_offset_y); Serial.print("\t");
 			Serial.print(settings.gyr_offset_z); Serial.print("\t");
-			Serial.print(settings.yawZero);      Serial.print("\t");
 			Serial.println("");
 		} // debug
 	} // else valid settings
@@ -186,7 +188,6 @@ void setup() {
 		CurieIMU.setGyroOffset(X_AXIS, settings.gyr_offset_x);
 		CurieIMU.setGyroOffset(Y_AXIS, settings.gyr_offset_y);
 		CurieIMU.setGyroOffset(Z_AXIS, settings.gyr_offset_z);
-		yawZero = settings.yawZero;
 		setupFrequencyDomain();
 	} // else no calibration, use values from persistent settings
 
@@ -213,8 +214,8 @@ void setup() {
 	} // debug
 
 	// Prepare the counters for YAW zeroing button detection
-	yawZeroSwitchAntiBounce = 25;
-	yawZeroSwitchAntiBounceCnt = yawZeroSwitchAntiBounce;
+	backwardsSwitchAntiBounce = 25;
+	backwardsSwitchAntiBounceCnt = backwardsSwitchAntiBounce;
 	
 } // setup()
 
@@ -243,13 +244,20 @@ void setupFrequencyDomain() {
 	microsPerReading = 1e6 / 25; // Let's try to keep the 25Hz here, albeit micros() is not a single micro tick but 4 or 8 micros min.
 	microsPrevious = micros(); // No more actions in setup() - we deal with the eventual apprx. 70s overflow of the micros() count in the loop()
 	filtertraining = 100; // IMU algorithm updates requested before considered good for NMEA data (i.e. @25Hz 100 = 4s)
+
 	calibrationSwitchAntiBounce = 25; // (i.e. @25Hz 25 = 1s)
 	calibrationSwitchAntiBounceCnt = calibrationSwitchAntiBounce;
+
+	microsPerRollPitchNMEA = 2e6; // every two seconds
+	microsRollPitchNMEAPrevious = micros();
+	microsPerRotNMEA = 1e6; // every second
+	microsPerRotNMEAPrevious = micros();
 
 } // setupFrequencyDomain()
 
 void loop() {
 
+	char nmeaSentence[50];
 	microsNow = micros();
 	if ((unsigned long)(microsNow - microsPrevious) >= microsPerReading) { // cast subtraction to deal with overflow of micros()
 
@@ -271,12 +279,14 @@ void loop() {
 		roll = filter->getRoll() ;
 		pitch = filter->getPitch();
 		heading = filter->getYaw();
+		rotation = -CurieIMU.readGyroScaled(Z_AXIS); // NEMA ROT sentence: negative is bow turning to port side
 
 		if (debug) {
 			Serial.print("Orientation:");
 			Serial.print(" Yaw: "); printFloat(heading,1);
 			Serial.print(" Pitch: "); printFloat(pitch,1);
 			Serial.print(" Roll: "); printFloat(roll,1);
+			Serial.print(" Rot: "); printFloat(rotation, 1);
 			Serial.println("");
 		} // debug
 
@@ -302,30 +312,31 @@ void loop() {
 			calibrationSwitchAntiBounceCnt = calibrationSwitchAntiBounce;
 		} // else there is no calibration request button / switch on
 
-		// Check if yaw reset button / temporary switch is on
-		if (digitalRead(PIN_YAWZERO_BUTTON) == 0) {
+		// Check if switch or jumper telling that USB connector is pointing backwards is on
+		if (digitalRead(PIN_USBPOINTS_BACK) == 0) {
 			if (debug) {
-				Serial.print("Yaw zeroing request button / switch on - checking against bounce: (");
-				Serial.print(yawZeroSwitchAntiBounceCnt);
+				Serial.print("Backwards installation switch on - checking against bounce: (");
+				Serial.print(backwardsSwitchAntiBounceCnt);
 				Serial.println(")");
 			}
-			if (yawZeroSwitchAntiBounceCnt <= 0) {
-				yawZero = heading;
+			if (backwardsSwitchAntiBounceCnt <= 0) {
+				backwardsSwitch = true;
 				if (debug) {
 					Serial.println("");
-					Serial.print("Yaw zeroing request button / switch on - zeroing confirmed: ");
-					Serial.println(yawZero);
+					Serial.println("Backwards installation switch on - confirmed.");
 				}
-				yawZeroSwitchAntiBounceCnt = yawZeroSwitchAntiBounce;
-			} // then it is real switch button push...
+				backwardsSwitchAntiBounceCnt = backwardsSwitchAntiBounce;
+			} // then it is real switch or jumper set...
 			else {
-				yawZeroSwitchAntiBounceCnt--;
+				backwardsSwitchAntiBounceCnt--;
 			} // else not yet sure, wait for antibounce time to elapse
-		} // perhaps there is a request to zero to yaw - antibounce applied
+		} // perhaps a jumper / switch tells that USB connector is pointing backwards - antibounce applied
 		else {
-			yawZeroSwitchAntiBounceCnt = yawZeroSwitchAntiBounce;
-		} // else there is no yaw zeroing request button / switch on
+			backwardsSwitch = false;
+			backwardsSwitchAntiBounceCnt = backwardsSwitchAntiBounce;
+		} // else there is no switch/jumper on telling that USB connector is pointing backwards
 
+		microsNow = micros();
 		microsPrevious = microsNow;
 	} // if time to read the sensors to keep up within the frequency domain
 
@@ -333,7 +344,74 @@ void loop() {
 	if (calibrate)
 		calibrateAccGyro();
 
-	// check if time to send the NMEA sentences
+	// check if time to send the NMEA sentence(s) for roll and pitch
+	microsNow = micros();
+	if ( ((unsigned long)(microsNow - microsRollPitchNMEAPrevious) >= microsPerRollPitchNMEA) &&
+		(filtertraining <= 0) ) {
+		// OpenCPN understanding of the dreaded XDR,
+		// cf. http://www.cruisersforum.com/forums/f134/heel-and-pitch-180056.html#post2327822
+		//
+		// XDR - Transducer Measurement
+		//
+		//        1 2   3 4            n
+		//        | |   | |            |
+		// $--XDR,a,x.x,a,c--c, ..... *hh<CR><LF>
+		//
+		// Field Number:
+		//  1) Transducer Type
+		//  2) Measurement Data
+		//  3) Unit of Measurement, Celcius
+		//  4) Name of transducer
+		//  ...
+		//  n) Checksum
+		// There may be any number of quadruplets like this, each describing a sensor. The last field will be a checksum as usual.
+		// Ex. 1) Type is "A" and
+		// 4) Name is "PTCH" or
+		// 4) Name is "ROLL" corresponding
+		// 2) data (degrees) will be shown in the Dashboard instruments Pitch and/or Heel.
+		// Positive Pitch is Nose up. Positive Roll is to Starboard.
+		// e.g. $KMXDR,A,5.0,,PTCH,A,12.0,,ROLL,*hh
+		// Will give you 5 degr pitch and 12 degr. heel.
+		// It has 37 characters including CR/LF: 12bits/char(max),total12x37=444bits@4800baud takes 925ms < 100 ms
+		//
+		float rollOut = getDotZeroFive(roll);
+		if (!backwardsSwitch)
+			rollOut = -rollOut;
+		float pitchOut = getDotZeroFive(pitch);
+		if (backwardsSwitch)
+			pitchOut = -pitchOut;
+		sprintf(&nmeaSentence[0], "$%sXDR,A,%.1f,,PTCH,A,%.1f,,ROLL,*", prefixNMEA, pitchOut, rollOut);
+		byte chk = checksum(&nmeaSentence[0]);
+		int appendStrIdx = strlen(&nmeaSentence[0]);
+		sprintf(&nmeaSentence[appendStrIdx], "%02X", chk);
+		Serial.println(nmeaSentence);
+		microsNow = micros();
+		microsRollPitchNMEAPrevious = microsNow;
+	} // if is time to build and send the Roll and Pitch NMEA sentence if the filter is sufficiently trained
+
+	// check if time to send the NMEA sentence(s) for yaw rate (i.e. rotation speed)
+	microsNow = micros();
+	if ((unsigned long)(microsNow - microsPerRotNMEAPrevious) >= microsPerRotNMEA) {
+		// Rate of turn  https://www.trimble.com/OEM_ReceiverHelp/V4.44/en/NMEA-0183messages_ROT.html
+		//
+		// An example of the ROT string is :
+		// $--ROT,x.x,A*hh
+		// ROT message fields
+		// Field 	Meaning
+		//   0 	Message ID, ex. $GPROT
+		//   1 	Rate of turn, degrees / minutes, “–” indicates bow turns to port
+		//   2 	A: Valid data
+		//      V: Invalid data
+		//	 3 	The checksum data, always begins with *
+		float rotationOut = getDotZeroFive(rotation);
+		sprintf(&nmeaSentence[0], "$%sROT,%.1f,A*", prefixNMEA, rotationOut);
+		byte chk = checksum(&nmeaSentence[0]);
+		int appendStrIdx = strlen(&nmeaSentence[0]);
+		sprintf(&nmeaSentence[appendStrIdx], "%02X", chk);
+		Serial.println(nmeaSentence);
+		microsNow = micros();
+		microsPerRotNMEAPrevious = microsNow;
+	} // then send time out for rotation data, no need to wait for filter, reading from gyroscope, scaled
 
 
 } // loop()
@@ -379,9 +457,6 @@ void calibrateAccGyro() {
 	settings.gyr_offset_x = CurieIMU.getGyroOffset(X_AXIS);
 	settings.gyr_offset_y = CurieIMU.getGyroOffset(Y_AXIS);
 	settings.gyr_offset_z = CurieIMU.getGyroOffset(Z_AXIS);
-	yawZero = 180.0;
-	settings.yawZero = yawZero;
-
 
 	if (debug) {
 		Serial.println("Internal sensor offsets AFTER calibration...");
@@ -391,7 +466,6 @@ void calibrateAccGyro() {
 		Serial.print(settings.gyr_offset_x); Serial.print("\t");
 		Serial.print(settings.gyr_offset_y); Serial.print("\t");
 		Serial.print(settings.gyr_offset_z); Serial.print("\t");
-		Serial.print(settings.yawZero);      Serial.print("\t");
 		Serial.println("");
 		Serial.print("Press a key to continue or wait 15s...");
 		int waitcmdsec = 15;
@@ -445,7 +519,7 @@ float convertRawGyro(int gRaw) {
 } // convertRawGyro()
 
 void printFloat(float val, byte precision){
-	// see http://forum.arduino.cc/index.php?topic=44216.msg320131#msg320131
+	// courtesy http://forum.arduino.cc/index.php?topic=44216.msg320131#msg320131
 
 	Serial.print(int(val));  //prints the int part
 	if (precision > 0) {
@@ -469,26 +543,34 @@ void printFloat(float val, byte precision){
 	} // if decimal digits
 } // printFloat()
 
-// Memory functions for Arduino101 compiler chain courtesy to https://github.com/01org/corelibs-arduino101/pull/396/files
-extern char __start_heap;
-extern char __end_heap;
-extern char __stack_size;
-extern char __stack_start;
-int freeStack() {
-	int stack_end;
-	int mark;
-	stack_end = ((int)&__stack_start) - ((int)&__stack_size);
-	return ((int)&mark) - stack_end;
-} // freeStack()
-int freeHeap(void) {
-	int hsize;
-	struct mallinfo mi;
-	mi = mallinfo();
-	hsize = (int)&__end_heap - (int)&__start_heap;
-	return (hsize - mi.arena) + mi.fordblks;
-} // freeHeap()
-int freeMemory(void) {
-	int heap = freeHeap();
-	int stack = freeStack();
-	return (stack < 0) ? heap : stack + heap;
-} // freeMemory()
+float getDotZeroFive(float val) {
+	unsigned long frac;
+	float fracZeroFive;
+	int wholeNum = (int)val;
+	if (val >= 0)
+		frac = (unsigned long)((val - (float)wholeNum) * 10.0);
+	else
+		frac = (unsigned long)((float(wholeNum) - val) * 10.0);
+	if (frac <= 2) {
+		fracZeroFive = 0.0;
+	} // then zero
+	else {
+		if (frac <= 7) {
+			fracZeroFive = 0.5;
+		} // then five
+		else {
+			fracZeroFive = 1.0;
+		} // else zero but round up
+	} // else not zero
+	return ((float)wholeNum + fracZeroFive);
+} // getDotZeroFive()
+
+byte checksum(char* str)
+{
+	byte cs = 0;
+	for (unsigned int n = 1; n < strlen(str) - 1; n++)
+	{
+		cs ^= str[n];
+	}
+	return cs;
+} // checksum()
