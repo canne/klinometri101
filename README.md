@@ -1,6 +1,8 @@
 # klinometri101
 NMEA 0183 ROLL PITCH YAW Genuino101
 
+// https://github.com/canne/klinometri101
+
 // Work derived from CurieIMU library and from Madgwick library visualizer, see
 
 // https://www.arduino.cc/en/Tutorial/Genuino101CurieIMUOrientationVisualiser
@@ -61,7 +63,11 @@ The board's activity LED signals the activity:
 
 LED unlit - program is waiting for a listener on the USB serial line
 
-LED blinking every second - program cannot detect an IMU unit
+LED lit - USB serial line is available - waiting for commands (5s)
+
+LED blinking every second - calibration done plese release the switch
+
+LED blinking every 2s - program cannot detect an IMU unit
 
 LED blinking very fast - the IMU unit is read
 
