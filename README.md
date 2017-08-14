@@ -47,7 +47,7 @@ can find some application for it.
 Gyroscope and accelerator sensors are sampled at 25 Hz and Madgwick filter
 is maintaining the position data at that rate. The ratio of turn is the latest
 sample of the gyroscope's Z-axis. The limitation in the NMEA 0183 serial
-communication (max. 100ms/message_ means that data which is received is already
+communication (max. 100ms/message) means that data which is received is already
 historical compared to the Madgwick filter's location view. To make the NMEA
 output less nervous between two consecutive messages, all measurements are
 truncated to one significant decimal with a step of 0.5 degrees: 1.1, 1.2 will
