@@ -98,7 +98,7 @@ accelerometer and gyroscope an on-board LED starts to blink once
 per second if the jumper or switch is left on. After removing it
 the values are stored in the permanent memory of the board and
 fetched at next boot. Therefore, it is possible to correct
-installation inaccuracies with single calibration.
+installation inaccuracies with a calibration.
 
 
 ## Selecting the general orientation of the installation
