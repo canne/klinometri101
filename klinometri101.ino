@@ -7,7 +7,13 @@
 // petri38-github@yahoo.com
 // GPL v3 - see LICENSE
 
+// Bluetooth Low Energy (BLE) support: comment out the directive below to disable BLE support
+#define BLESERVICE 1
+
 #include <CurieIMU.h>
+#if defined(BLESERVICE)
+#include <CurieBLE.h>
+#endif
 #include <MadgwickAHRS.h>
 #include <EEPROM.h>
 #include <MemoryFree.h>
@@ -17,11 +23,29 @@
 // Switch or jumper connecting this pin to GND indicater that Arduino101's USB connector is pointing to the back of the boat
 #define PIN_USBPOINTS_BACK 8
 
+#if defined(BLESERVICE)
+// Create my own UUIDs; used https://www.uuidgenerator.net/
+#define IMU_SERVICE_UUID "02522741-5a1c-46e6-842a-2a35f362f25c"
+#define ROT_CHAR_UUID "06933f3b-7610-4ccf-85f5-102a0ef3effe"
+#define PIT_CHAR_UUID "552a698e-97ae-4793-925c-bf50fbab9707"
+#define ROL_CHAR_UUID "33daadb5-a48c-47f0-8438-496c915a2962"
+
+BLEPeripheral blePeripheral; // Arduino/Genuino 101 acts as a BLE peripheral
+BLEService nmeaBleService(IMU_SERVICE_UUID); // Service provided by this device, datapoints:
+BLEFloatCharacteristic rotChar(ROT_CHAR_UUID, BLERead | BLENotify);
+BLEFloatCharacteristic pitChar(PIT_CHAR_UUID, BLERead | BLENotify);
+BLEFloatCharacteristic rolChar(ROL_CHAR_UUID, BLERead | BLENotify);
+BLECentral centralBLE = blePeripheral.central(); // This is the central we are reporting to
+#endif
+
 char const *prefixNMEA = "KM"; // Feel free to change this if not suiting your needs
 Madgwick *filter = NULL;
 unsigned long microsPerReading, microsNow, microsPrevious;
 unsigned long microsPerRollPitchNMEA, microsRollPitchNMEAPrevious;
 unsigned long microsPerRotNMEA, microsPerRotNMEAPrevious;
+#if defined(BLESERVICE)
+unsigned long microsPerCentral, microsPerCentralPrevious;
+#endif
 boolean debug;
 boolean calibrate;
 float accelScale, gyroScale;
@@ -54,7 +78,7 @@ struct settings_t
 
 void setup() {
 	char c; // read here from the serial line a command before the init
-	int waitcmdsec = 5; // How long time to wait for a command
+	int waitcmdsec; // How long time to wait for a command or port to open
 	int i;
 	boolean validsettings = false;
 
@@ -68,11 +92,27 @@ void setup() {
 	microsPerReading = 40; // microseconds between readings == 25Hz
 
 	Serial.begin(4800); // initialize Serial communication
+#if defined(BLESERVICE)
+	waitcmdsec = 10;
+	while (waitcmdsec > 0) {
+		if (!Serial)
+			delay(1000); // wait 1s
+		else
+			break;
+		waitcmdsec--;
+	} // while waiting for serila line (USB) - maybe there is but Bluetooth BLE?
+#else
 	while (!Serial);    // wait for the serial port to open - THERE _MUST_ BE A DEVICE LISTENING!
+#endif
 
-	blinkState = !blinkState; // we've got a listener!
+	blinkState = !blinkState; // we've got a listener! (or not, if this is Bluetooth BLE-only
 	digitalWrite(LED_BUILTIN, blinkState);	
 
+	waitcmdsec = 5; // we maybe got a listener, wait this time for optional commands
+#if defined(BLESERVICE)
+	if (!Serial)
+		waitcmdsec = 0; // No need to wait, nothing will come, anyway
+#endif
 	debug = false; calibrate = false;
 	while (waitcmdsec > 0) { // wait for an optional commands from the serial port right after serial start
 		for (i = 0; i < 4; i++) {
@@ -99,11 +139,25 @@ void setup() {
 
 	if (debug) {
 		Serial.println(""); Serial.println("");
-		Serial.println("Welcome to klinometri101 v1.0.2");
+		Serial.println("Welcome to klinometri101 v1.1.0");
+#if defined(BLESERVICE)
+		Serial.println("Bluetooth Low Energy peripheral");
+#endif
 		Serial.println("===============================");
 		Serial.println("Running in debug mode - output is not usable in navigation");
 		Serial.println("");
 	} // if debug
+
+#if defined(BLESERVICE)
+	if (debug) Serial.print("Initialing BLE peripheral... ");
+	blePeripheral.setLocalName("KME"); // Initialize BLE peripheral
+	blePeripheral.setAdvertisedServiceUuid(nmeaBleService.uuid());
+	blePeripheral.addAttribute(nmeaBleService);
+	blePeripheral.addAttribute(rotChar);
+	blePeripheral.addAttribute(pitChar);
+	blePeripheral.addAttribute(rolChar);
+	if (debug) Serial.println("Done.");
+#endif
 
 	// Check if the calibration request push button is pushed / switch is turned on
 	boolean bounce = true;
@@ -219,6 +273,23 @@ void setup() {
 		delay(1000);
 	} // while the calibration push button / switch is on, çannot allow loop() to start
 
+#if defined(BLESERVICE)
+	if (debug) Serial.print("activating Bluetooth device... ");
+	blePeripheral.begin();
+	if (debug) Serial.println("OK, waiting for connections.");
+	if (debug) Serial.print("Checking for central... ");
+	centralBLE = blePeripheral.central();
+	if (debug) {
+		if (centralBLE) {
+			Serial.print("Connected to central: ");
+			Serial.println(centralBLE.address());
+		} // then central found
+		else {
+			Serial.println("No central found");
+		} // else no central found
+	} // debug
+#endif
+
 	if (debug) {
 		Serial.print("setup() terminated - Press a key to continue or wait 15s...");
 		waitcmdsec = 15;
@@ -274,6 +345,11 @@ void setupFrequencyDomain() {
 	microsRollPitchNMEAPrevious = micros();
 	microsPerRotNMEA = 1e6; // every second
 	microsPerRotNMEAPrevious = micros();
+
+#if defined(BLESERVICE)
+	microsPerCentral = 3e6; // every three seconds
+	microsPerCentralPrevious = micros();
+#endif
 
 } // setupFrequencyDomain()
 
@@ -370,6 +446,32 @@ void loop() {
 	if (backwardsSwitch)
 		turnBackwards();
 
+#if defined(BLESERVICE)
+	// check if it is time to check for a central BLE
+	microsNow = micros();
+	if ((unsigned long)(microsNow - microsPerCentralPrevious) >= microsPerCentral) {
+		if (debug) Serial.print("centralBLE check... ");
+		if (centralBLE) {
+			if (debug) Serial.print("Connected to central: ");
+			if (debug) Serial.println(centralBLE.address());
+		} // then there is a valid central
+		else {
+			centralBLE = blePeripheral.central();
+			if (debug) {
+				if (centralBLE) {
+					Serial.print("NEW! Connected to central: ");
+					Serial.println(centralBLE.address());
+				} // then central found
+				else {
+					Serial.println("No central found");
+				} // else no central found
+			} // debug
+		}  // else there is no valid central
+		microsNow = micros();
+		microsPerCentralPrevious = microsNow;
+	} // then time to check for BLE Central
+#endif
+
 	// check if time to send the NMEA sentence(s) for roll and pitch
 	microsNow = micros();
 	if ( ((unsigned long)(microsNow - microsRollPitchNMEAPrevious) >= microsPerRollPitchNMEA) &&
@@ -406,16 +508,28 @@ void loop() {
 		float pitchOut = getDotZeroFive(pitch);
 		if (backwards)
 			pitchOut = -pitchOut;
-		sprintf(&nmeaSentence[0], "$%sXDR,A,%.1f,,PTCH,A,%.1f,,ROLL,*", prefixNMEA, pitchOut, rollOut);
-		byte chk = checksum(&nmeaSentence[0]);
-		int appendStrIdx = strlen(&nmeaSentence[0]);
-		sprintf(&nmeaSentence[appendStrIdx], "%02X", chk);
+#define makeXDR() {sprintf(&nmeaSentence[0], "$%sXDR,A,%.1f,,PTCH,A,%.1f,,ROLL,*", prefixNMEA, pitchOut, rollOut); \
+		byte chk = checksum(&nmeaSentence[0]); \
+		int appendStrIdx = strlen(&nmeaSentence[0]); \
+		sprintf(&nmeaSentence[appendStrIdx], "%02X", chk);}
+#if defined(BLESERVICE)
+		if (centralBLE) {
+			rolChar.setValue(rollOut);
+			pitChar.setValue(pitchOut);
+		} // then Central BLE
+		if (Serial) {
+			makeXDR()
+			Serial.println(nmeaSentence);
+		} // then some reason to build a NMEA string and to send it out
+#else
+		makeXDR();
 		Serial.println(nmeaSentence);
+#endif
 		microsNow = micros();
 		microsRollPitchNMEAPrevious = microsNow;
 	} // if is time to build and send the Roll and Pitch NMEA sentence if the filter is sufficiently trained
 
-	// check if time to send the NMEA sentence(s) for yaw rate (i.e. rotation speed)
+	// check if time to send the NMEA sentence(s) for yaw rate (i.e. rate of turn or ROT)
 	microsNow = micros();
 	if ((unsigned long)(microsNow - microsPerRotNMEAPrevious) >= microsPerRotNMEA) {
 		// Rate of turn  https://www.trimble.com/OEM_ReceiverHelp/V4.44/en/NMEA-0183messages_ROT.html
@@ -430,11 +544,23 @@ void loop() {
 		//      V: Invalid data
 		//	 3 	The checksum data, always begins with *
 		float rotationOut = getDotZeroFive(rotation);
-		sprintf(&nmeaSentence[0], "$%sROT,%.1f,A*", prefixNMEA, rotationOut);
-		byte chk = checksum(&nmeaSentence[0]);
-		int appendStrIdx = strlen(&nmeaSentence[0]);
-		sprintf(&nmeaSentence[appendStrIdx], "%02X", chk);
+#define makeROT() {sprintf(&nmeaSentence[0], "$%sROT,%.1f,A*", prefixNMEA, rotationOut); \
+		byte chk = checksum(&nmeaSentence[0]); \
+		int appendStrIdx = strlen(&nmeaSentence[0]); \
+		sprintf(&nmeaSentence[appendStrIdx], "%02X", chk); \
+		Serial.println(nmeaSentence);}
+#if defined(BLESERVICE)
+		if (centralBLE) {
+			rotChar.setValue(rotationOut);
+		} // then Central BLE
+		if (Serial) {
+			makeROT()
+			Serial.println(nmeaSentence);
+		} // then some reason to build a NMEA string and to send it out
+#else
+		makeROT();
 		Serial.println(nmeaSentence);
+#endif
 		microsNow = micros();
 		microsPerRotNMEAPrevious = microsNow;
 	} // then send time out for rotation data, no need to wait for filter, reading from gyroscope, scaled

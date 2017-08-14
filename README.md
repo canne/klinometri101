@@ -70,6 +70,21 @@ Usually, this program is a chart plotter, like OCPN with the excellent
 tactics-plugin. For debugging purposes it can be a serial console, such
 as PuTTY.exe on Windows or minicom on Linux.
 
+In case a secondary data channel, BLE (see below) is enabled by a compilation
+time switch (see source code), the USB serial line availability is only
+waited for a timeout period of ten seconds. If it does not come available
+within this time, only the BLE data service will remain available.
+
+## Bluetooth Low Energy (BLE) peripheral support
+
+The program provides the values of NMEA sentences for ROT, PTCH and ROLL
+as BLE peripheral data the same time when data is sent to serial USB.
+If serial USB is not available, the values are still made available on
+BLE, provided that there is BLE Central which has made a connection to
+the board. The data is only written out to BLE, no commands are received
+but one must juse switches and jumpers to control the calibration and
+orientation as explained below.
+
 ## Calibration
 
 Once the serial communication becomes available, the gyroscope and
