@@ -1,38 +1,31 @@
 # klinometri101
 
-NMEA 0183 ROLL PITCH YAW Genuino101
+## NMEA 0183 ROLL PITCH YAW Genuino101
 
-// https://github.com/canne/klinometri101
+[Hosted on GitHub](https://github.com/canne/klinometri101)
 
-// Work derived from CurieIMU library and from Madgwick library visualizer, see
+Work derived from CurieIMU library and from Madgwick library visualizer, get
+started with your Arduino/Genuino101 for this purpose with:
+https://www.arduino.cc/en/Tutorial/Genuino101CurieIMUOrientationVisualiser
 
-// https://www.arduino.cc/en/Tutorial/Genuino101CurieIMUOrientationVisualiser
+Please get the above example working first, then continue with this sketch
+which is best debugged and tested with PuTTY and used on a USB serial line 
 
-// Please get the above example working first, then continue with this sketch
+petri38-github@yahoo.com
+GPL v3 - see LICENSE
 
-// which is best debugged and tested with PuTTY and used on a USB serial line 
-
-// petri38-github@yahoo.com
-
-// GPL v3 - see LICENSE
-
+## Introduction
 Program to use Genuino101 as inclination and ratio of turn sensor of a boat
-
 with NMEA 0183 output. Gyroscope and accelerator sensors are sampled at 25 Hz.
-
 Please note that the board has but 6-degree of freedom sensor, therefore it
-
 cannot be used as a magnetic compass. Because most of navigation systems
-
 provide even several heading values, the yaw value is not sent out to create
-
 confusion. It can be observed in debug mode (see below), though.
 
+## Ratio of Turn
 
 The Ratio of Turn (ROT) sentences are sent out once per second from gyroscope
-
 measured data. The sentence looks like this: $KMROT,-1.5,A*hh (hh=checksum),
-
 negative values indicate bow turning to port side.
 
 
