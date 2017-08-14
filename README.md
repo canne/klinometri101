@@ -119,8 +119,8 @@ the activity as follows:
 * LED unlit
   - program is waiting for a listener on the USB serial line
 * LED lit
- - USB serial line is available
- - waiting for commands (5s)
+  - USB serial line is available
+  - waiting for commands (5s)
 * LED blinking every second
   - calibration done please release the switch
 * LED blinking every 2s
