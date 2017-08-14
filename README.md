@@ -11,16 +11,11 @@ https://www.arduino.cc/en/Tutorial/Genuino101CurieIMUOrientationVisualiser
 Please get the above example working first, then continue with this sketch
 which is best debugged and tested with PuTTY and used on a USB serial line 
 
-petri38-github@yahoo.com
 GPL v3 - see LICENSE
 
 ## Introduction
-Program to use Genuino101 as inclination and ratio of turn sensor of a boat
-with NMEA 0183 output. Gyroscope and accelerator sensors are sampled at 25 Hz.
-Please note that the board has but 6-degree of freedom sensor, therefore it
-cannot be used as a magnetic compass. Because most of navigation systems
-provide even several heading values, the yaw value is not sent out to since
-it is a relative value only. It can be observed in debug mode (see below).
+Program to use an Arduino/Genuino101 in a boat instrumentation as
+an inclination and ratio of turn sensor with NMEA 0183 output.
 
 ## Ratio of Turn
 
@@ -36,12 +31,29 @@ out in format known to be recognized by most of OpenCPN chart plotter
 plugins: `$KMXDR,A,5.0,,PTCH,A,12.0,,ROLL,*hh` (hh=checksum),
 negative values in pitch indicates bow down, in roll port side.
 
+## Heading or Yaw
+
+Please note that Arduino/Genuino101 has but 6-degree of freedom sensor,
+therefore it cannot be used as a magnetic compass. There are several projects
+using other chipsets, search for "arduino 9 degrees of freedom". Madgwick-
+library provides the yaw but it is, of course, relative to the calibration,
+i.e. around 180 degrees. Because most of the navigation systems provide
+(even several) heading values, the yaw value is not sent out to confuse the
+navigation system... It can be observed in debug mode (see below); maybe you
+can find some application for it.
+
 ## Accuracy
 
-The NMEA output is truncated to one significant decimal with a step of
-0.5 degrees: 1.1, 1.2 becomes 1.0; 1.3, 1.4, 1.6, 1.7 becomes 1.5; 1.8 and
-1.9 becomes 2.0. Tests have shown that even placing the sensor on marble no
-better accuracy can be obtained.
+Gyroscope and accelerator sensors are sampled at 25 Hz and Madgwick filter
+is maintaining the position data at that rate. The ratio of turn is the latest
+sample of the gyroscope's Z-axis. The limitation in the NMEA 0183 serial
+communication (max. 100ms/message_ means that data which is received is already
+historical compared to the Madgwick filter's location view. To make the NMEA
+output less nervous between two consecutive messages, all measurements are
+truncated to one significant decimal with a step of 0.5 degrees: 1.1, 1.2 will
+become 1.0; 1.3, 1.4, 1.6, 1.7 will become 1.5; 1.8 and 1.9 will become 2.0.
+Tests have shown that even placing the sensor on a marble no better accuracy
+can be obtained.
 
 ## NMEA 0183 Serial interface on USB
 
@@ -103,12 +115,17 @@ installation inaccuracies with a calibration.
 
 ## Selecting the general orientation of the installation
 
-Another switch/jumper can be used to change the installation
-orientation of the board. By default it is assumed that the
-USB connector of Arduino 101 is pointing towards the bow of
-the boat. By installing a jumper or a closed switch between
-GND pin and pin #8, it is assumed that the USB connector is
-pointing to the aft. The jumper or switch can be used any time.
+By default it is assumed that the USB connector of Arduino 101
+is pointing towards the bow of the boat. A switch/jumper can be used
+to change the installation orientation of the board permanently.
+By installing a jumper or a closed switch between GND pin
+and pin #8 while the acceleration/gyroscope sensors are read
+(the on-board LED is blinking very fast), the board's output is inversed,
+bow becomes aft and starboard becomes port. Please remove the jumper
+after the command is recognized (LED blinking once per second) -
+the new orientation setting is stored in the permanent memory and
+reloaded at every restart until a new orientation change request is
+given.
 
 ## LED Diagnostic messages
 
@@ -123,7 +140,8 @@ the activity as follows:
   - waiting for commands (5s)
 * LED blinking every second
   - calibration done please release the switch
+  - orientation change request executed, remove the jumper
 * LED blinking every 2s
-  - program cannot detect an IMU unit
+  - program cannot detect an IMU sensor unit
 * LED blinking very fast
-  - the IMU unit is read at @25Hz
+  - the IMU sensor unit is read at @25Hz
