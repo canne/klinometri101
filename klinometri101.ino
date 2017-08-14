@@ -1,4 +1,4 @@
-// NMEA 0183 ROLL PITH YAW for Genuino101
+// NMEA 0183 ROLL PITH ROT (and yaw) for Arduino/Genuino101
 // https://github.com/canne/klinometri101
 // Work derived from CurieIMU library and from Madgwick library visualizer, see
 // https://www.arduino.cc/en/Tutorial/Genuino101CurieIMUOrientationVisualiser
@@ -11,7 +11,6 @@
 #include <MadgwickAHRS.h>
 #include <EEPROM.h>
 #include <MemoryFree.h>
-#include <math.h>
 
 // Button/switch connecting this pin to GND requests calibration
 #define PIN_CALIBRATE_BUTTON 7
@@ -36,7 +35,7 @@ boolean blinkState;
 int filtertraining;
 int calibrationSwitchAntiBounce, calibrationSwitchAntiBounceCnt;
 int backwardsSwitchAntiBounce, backwardsSwitchAntiBounceCnt;
-boolean backwardsSwitch;
+boolean backwardsSwitch, backwards;
 int eeAddress;
 
 struct settings_t
@@ -48,6 +47,7 @@ struct settings_t
 	float gyr_offset_x;
 	float gyr_offset_y;
 	float gyr_offset_z;
+	boolean backwards;
 	unsigned long end;
 } settings;
 
@@ -73,13 +73,22 @@ void setup() {
 	blinkState = !blinkState; // we've got a listener!
 	digitalWrite(LED_BUILTIN, blinkState);	
 
-	debug = false;
+	debug = false; calibrate = false;
 	while (waitcmdsec > 0) { // wait for an optional commands from the serial port right after serial start
 		for (i = 0; i < 4; i++) {
 			if (Serial.available())  {
 				c = Serial.read();  //gets one byte from serial buffer
-				if ((c == 'd') || (c == 'D')) debug = true; // type key D to switch on debug mode
-				if ((c == 'c') || (c == 'C')) calibrate = true; // type key C to force calibration
+				if ((c == 'd') || (c == 'D')) {
+					debug = true; // type key D to switch on debug mode
+					if (calibrate)
+						Serial.print("CALIBRATE DEBUG");
+					else
+						Serial.print("DEBUG ");
+				} // then debug command
+				if ((c == 'c') || (c == 'C')) {
+					calibrate = true; // type key C to force calibration
+					if (debug) Serial.print("CALIBRATE");
+				} // then force calibration command
 			} // then character(s)
 			if (debug && calibrate) break;
 			delay(250);
@@ -88,9 +97,13 @@ void setup() {
 		waitcmdsec--;
 	} // while() wait for a key w/ timeout
 
-	if (debug) Serial.println("Welcome to klinometri101 v1.0.1");
-	if (debug) Serial.println("===============================");
-	if (debug) Serial.println("Running in debug mode - output is not usable in navigation");
+	if (debug) {
+		Serial.println(""); Serial.println("");
+		Serial.println("Welcome to klinometri101 v1.0.2");
+		Serial.println("===============================");
+		Serial.println("Running in debug mode - output is not usable in navigation");
+		Serial.println("");
+	} // if debug
 
 	// Check if the calibration request push button is pushed / switch is turned on
 	boolean bounce = true;
@@ -129,12 +142,15 @@ void setup() {
 
 	if (!validsettings) {
 		calibrate = true;
+		backwards = false;
+		settings.backwards = false;
 		if (debug) Serial.println("No valid settings found from persistent memory. Forcing calibration.");
 	} // no valid settings
 	else {
+		backwards = settings.backwards;
 		if (calibrate) {
 			if (debug) Serial.println("Valid settings found from persistent memory but calibration forced.");
-			if (debug) Serial.println("These values will be overwritten:");
+			if (debug) Serial.println("The settings will be overwritten:");
 		} // valid data but calibration requested
 		else {
 			if (debug) Serial.println("Valid settings found from persistent memory:");
@@ -146,7 +162,10 @@ void setup() {
 			Serial.print(settings.gyr_offset_x); Serial.print("\t");
 			Serial.print(settings.gyr_offset_y); Serial.print("\t");
 			Serial.print(settings.gyr_offset_z); Serial.print("\t");
-			Serial.println("");
+			if (settings.backwards)
+				Serial.println("TRUE");
+			else
+				Serial.println("FALSE");
 		} // debug
 	} // else valid settings
 
@@ -188,8 +207,9 @@ void setup() {
 		CurieIMU.setGyroOffset(X_AXIS, settings.gyr_offset_x);
 		CurieIMU.setGyroOffset(Y_AXIS, settings.gyr_offset_y);
 		CurieIMU.setGyroOffset(Z_AXIS, settings.gyr_offset_z);
-		setupFrequencyDomain();
 	} // else no calibration, use values from persistent settings
+
+	setupFrequencyDomain();
 
 	if (digitalRead(PIN_CALIBRATE_BUTTON) == 0)
 		if (debug) Serial.println("Please release the calibration request push button / switch");
@@ -211,12 +231,9 @@ void setup() {
 			waitcmdsec--;
 		} // while()
 		Serial.println("");
+		Serial.println("setup() - Done.");
 	} // debug
 
-	// Prepare the counters for YAW zeroing button detection
-	backwardsSwitchAntiBounce = 25;
-	backwardsSwitchAntiBounceCnt = backwardsSwitchAntiBounce;
-	
 } // setup()
 
 void setupFrequencyDomain() {
@@ -248,6 +265,11 @@ void setupFrequencyDomain() {
 	calibrationSwitchAntiBounce = 25; // (i.e. @25Hz 25 = 1s)
 	calibrationSwitchAntiBounceCnt = calibrationSwitchAntiBounce;
 
+	// Prepare the counters for orientation turning request button detection
+	backwardsSwitchAntiBounce = 25;
+	backwardsSwitchAntiBounceCnt = backwardsSwitchAntiBounce;
+	backwardsSwitch = false;
+
 	microsPerRollPitchNMEA = 2e6; // every two seconds
 	microsRollPitchNMEAPrevious = micros();
 	microsPerRotNMEA = 1e6; // every second
@@ -261,6 +283,7 @@ void loop() {
 	microsNow = micros();
 	if ((unsigned long)(microsNow - microsPrevious) >= microsPerReading) { // cast subtraction to deal with overflow of micros()
 
+		if (debug) Serial.print("Read - ");
 		CurieIMU.readMotionSensor(aix, aiy, aiz, gix, giy, giz);
 		blinkState = !blinkState;
 		digitalWrite(LED_BUILTIN, blinkState);
@@ -325,7 +348,6 @@ void loop() {
 					Serial.println("");
 					Serial.println("Backwards installation switch on - confirmed.");
 				}
-				backwardsSwitchAntiBounceCnt = backwardsSwitchAntiBounce;
 			} // then it is real switch or jumper set...
 			else {
 				backwardsSwitchAntiBounceCnt--;
@@ -343,6 +365,10 @@ void loop() {
 	// Check if calibration has been requested by button/switch
 	if (calibrate)
 		calibrateAccGyro();
+
+	// Check if request to change the orientation to 'backwards'
+	if (backwardsSwitch)
+		turnBackwards();
 
 	// check if time to send the NMEA sentence(s) for roll and pitch
 	microsNow = micros();
@@ -372,13 +398,13 @@ void loop() {
 		// Positive Pitch is Nose up. Positive Roll is to Starboard.
 		// e.g. $KMXDR,A,5.0,,PTCH,A,12.0,,ROLL,*hh
 		// Will give you 5 degr pitch and 12 degr. heel.
-		// It has 37 characters including CR/LF: 12bits/char(max),total12x37=444bits@4800baud takes 925ms < 100 ms
+		// It has 37 characters including CR/LF: 12bits/char(max),total12x37=444bits@4800baud takes 92.5ms < 100 ms
 		//
 		float rollOut = getDotZeroFive(roll);
-		if (!backwardsSwitch)
+		if (!backwards)
 			rollOut = -rollOut;
 		float pitchOut = getDotZeroFive(pitch);
-		if (backwardsSwitch)
+		if (backwards)
 			pitchOut = -pitchOut;
 		sprintf(&nmeaSentence[0], "$%sXDR,A,%.1f,,PTCH,A,%.1f,,ROLL,*", prefixNMEA, pitchOut, rollOut);
 		byte chk = checksum(&nmeaSentence[0]);
@@ -460,14 +486,8 @@ void calibrateAccGyro() {
 
 	if (debug) {
 		Serial.println("Internal sensor offsets AFTER calibration...");
-		Serial.print(settings.acc_offset_x); Serial.print("\t");
-		Serial.print(settings.acc_offset_y); Serial.print("\t");
-		Serial.print(settings.acc_offset_z); Serial.print("\t");
-		Serial.print(settings.gyr_offset_x); Serial.print("\t");
-		Serial.print(settings.gyr_offset_y); Serial.print("\t");
-		Serial.print(settings.gyr_offset_z); Serial.print("\t");
-		Serial.println("");
-		Serial.print("Press a key to continue or wait 15s...");
+		printSettings();
+		Serial.print("Press a key to continue or wait 15s (next: writing EEPROM)...");
 		int waitcmdsec = 15;
 		while (waitcmdsec > 0) { // wait for a key from the serial port w/ timeout
 			if (Serial.available()) {
@@ -480,13 +500,11 @@ void calibrateAccGyro() {
 		Serial.println("");
 	} // debug
 
-	if (debug) Serial.println("Writing calibration values into the persistent memory...");
+	if (debug) Serial.println("Writing new, calibrated values into the persistent memory...");
 	settings.start = 0xBBCCAADD;
 	settings.end = 0xDDAACCBB;
 	EEPROM.put(eeAddress, settings);
 	if (debug) Serial.println("calibrateAccGyro() - Done.");
-
-	setupFrequencyDomain();
 
 	// Let's avoid to calibrate in a loop
 	calibrate = false;
@@ -496,9 +514,65 @@ void calibrateAccGyro() {
 		blinkState = !blinkState;
 		digitalWrite(LED_BUILTIN, blinkState);
 		delay(1000);
-	} // while the calibration push button / switch is on, çannot allow loop() to start
+	} // while the calibration push button / switch is on, çannot allow loop() to continue
 
 } // calibrateAccGyro()
+
+void turnBackwards() {
+
+	if (debug) Serial.println("turnBackwards()");
+	if (settings.backwards)
+		backwards = false; // flip-flop
+	else
+		backwards = true;
+	settings.backwards = backwards;
+	if (debug) {
+		Serial.println("New settings to be stored...");
+		printSettings();
+		Serial.print("Press a key to continue or wait 15s (next: writing EEPROM)...");
+		int waitcmdsec = 15;
+		while (waitcmdsec > 0) { // wait for a key from the serial port w/ timeout
+			if (Serial.available()) {
+				(void)Serial.read();  //gets one byte from serial buffer
+				break;
+			} // character available in serial
+			delay(1000); // wait for 1s
+			waitcmdsec--;
+		} // while()
+		Serial.println("");
+	} // debug
+
+	if (debug) Serial.println("Writing new values into the persistent memory...");
+	settings.start = 0xBBCCAADD;
+	settings.end = 0xDDAACCBB;
+	EEPROM.put(eeAddress, settings);
+	if (debug) Serial.println("turnBackwards() - Done.");
+
+	// Let's avoid to change the orientation value in a loop
+	backwardsSwitch = false;
+	backwardsSwitchAntiBounceCnt = backwardsSwitchAntiBounce;
+	if (digitalRead(PIN_USBPOINTS_BACK) == 0)
+		if (debug) Serial.println("Please release the orientation change request switch/button/jumper...");
+	while (digitalRead(PIN_USBPOINTS_BACK) == 0) {
+		blinkState = !blinkState;
+		digitalWrite(LED_BUILTIN, blinkState);
+		delay(1000);
+	} // while the orientation change request switch/button/jumper is on, çannot allow loop() to continue
+
+} // turnBackwards()
+
+void printSettings(void) {
+	Serial.print(settings.acc_offset_x); Serial.print("\t");
+	Serial.print(settings.acc_offset_y); Serial.print("\t");
+	Serial.print(settings.acc_offset_z); Serial.print("\t");
+	Serial.print(settings.gyr_offset_x); Serial.print("\t");
+	Serial.print(settings.gyr_offset_y); Serial.print("\t");
+	Serial.print(settings.gyr_offset_z); Serial.print("\t");
+	if (settings.backwards)
+		Serial.println("TRUE");
+	else
+		Serial.println("FALSE");
+} //printSettings()
 
 float convertRawAcceleration(int aRaw) {
 	// since we are using 2G range
