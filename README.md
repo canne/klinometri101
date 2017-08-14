@@ -1,6 +1,6 @@
 # klinometri101
 
-## NMEA 0183 ROLL PITCH ROT Genuino101
+## NMEA 0183 ROLL PITCH ROT Arduino/Genuino101
 
 [Hosted on GitHub](https://github.com/canne/klinometri101)
 
